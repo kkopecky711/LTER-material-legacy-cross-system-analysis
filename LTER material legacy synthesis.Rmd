@@ -1,0 +1,727 @@
+---
+title: "LTER material legacy synthesis"
+author: "Kai L. Kopecky"
+date: "2024-08-20"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(glmmTMB)
+library(ggeffects)
+library(broom.mixed)
+```
+
+# Exploratory looks at data from LTER sites
+
+## Konza Prairie
+```{r}
+# Explore relationship of previous year dead biomass on current year productivity
+# Should not group forbs and grass; grass could be considered the foundation species, and forbs neither produce legacies in the same way, nor do are they annuals
+
+knz <- read_csv("Data/Konza Prairie/PAB011.csv") %>% 
+  clean_names() %>% 
+  filter(pryrdead >=0,
+         lvgrass != "NA",
+         watershed != "001d")
+
+hist(knz$lvgrass)
+hist(log(knz$lvgrass))
+
+hist(knz$pryrdead)
+hist(log(knz$pryrdead))
+
+# Exploratory graph
+ggplot(knz, aes(x = pryrdead, y = lvgrass, color = watershed)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", 
+              aes(color = watershed)) +
+  #scale_x_continuous(expand = c(0.01,1)) +
+ # scale_y_continuous(expand = c(0.01,1)) +
+  labs(x = "Lagged dead biomass",
+       y = "Current year biomass") +
+  theme_classic()
+```
+
+Mixed effects models
+```{r}
+# glmm of total live biomass ~ previous year dead biomass
+knz.glmm <- glmmTMB(lvgrass ~ pryrdead + (1|transect),
+                    data = knz)
+summary(knz.glmm)
+
+predictions.knz <- ggpredict(knz.glmm, terms = ~ pryrdead + (1|transect))
+plot(predictions.knz)
+predictions.knz <- as.data.frame(predictions.knz)
+
+# Model visualization
+ggplot()+
+  geom_point(data = knz, 
+             aes(x = pryrdead, y = lvgrass),
+             alpha = 0.6,
+             size = 2) +
+  geom_ribbon(data = predictions.knz, 
+              aes(x = x, y = predicted, ymin =conf.low, ymax = conf.high), 
+              fill = "#3B4F8E",
+              alpha =0.5)+
+  geom_line(data = predictions.knz, 
+            aes(x = x , y = predicted, group = group)) +
+  scale_x_continuous(expand = c(0.01,1)) +
+  scale_y_continuous(#limits = c(0,160), 
+                     expand = c(0.01,1)) +
+  labs(x = "Previous year dead biomass (g/m^2)",
+       y = "Current year live biomass (g/m^2)") +
+  theme_classic()
+
+# glmm of total live biomass ~ previous year dead biomass*watershed
+knz.glmm <- glmmTMB(lvgrass ~ pryrdead*watershed + (1|transect),
+                    data = knz)
+summary(knz.glmm)
+
+predictions.knz <- ggpredict(knz.glmm, terms = ~ pryrdead*watershed + (1|transect))
+plot(predictions.knz)
+predictions.knz <- as.data.frame(predictions.knz)
+
+# Model visualization
+ggplot()+
+  geom_point(data = knz, 
+             aes(x = pryrdead, y = lvgrass, color = watershed),
+             alpha = 0.6,
+             size = 2) +
+  geom_ribbon(data = predictions.knz, 
+              aes(x = x, y = predicted, ymin =conf.low, ymax = conf.high, fill = group), 
+              #fill = "#3B4F8E",
+              alpha =0.5)+
+  geom_line(data = predictions.knz, 
+            aes(x = x , y = predicted, group = group, color = group)) +
+  scale_x_continuous(expand = c(0.01,1)) +
+  scale_y_continuous(#limits = c(0,160), 
+                     expand = c(0.01,1)) +
+  labs(x = "Previous year dead biomass (g/m^2)",
+       y = "Current year live biomass (g/m^2)") +
+  theme_classic()
+
+```
+
+```{r}
+# Normalized biomasses
+# Scaled to maximum values
+knz <- knz %>% 
+  mutate(pryrdead.norm = pryrdead/max(knz$pryrdead),
+         live_grass.norm = lvgrass/max(knz$lvgrass))
+
+# glmm of normalized total live biomass ~ normalized previous year dead biomass
+knz.norm.glmm <- glmmTMB(live_grass.norm ~ pryrdead.norm + (1|transect),
+                    data = knz)
+summary(knz.glmm)
+
+predictions.knz.norm <- ggpredict(knz.norm.glmm, terms = ~ pryrdead.norm + (1|transect))
+plot(predictions.knz.norm)
+predictions.knz.norm <- as.data.frame(predictions.knz.norm)
+
+# Model visualization of normalized biomasses
+ggplot()+
+  geom_point(data = knz, 
+             aes(x = pryrdead.norm, y = live_grass.norm),
+             alpha = 0.6,
+             size = 2) +
+  geom_ribbon(data = predictions.knz.norm, 
+              aes(x = x, y = predicted, ymin =conf.low, ymax = conf.high), 
+              alpha =0.5,
+              fill = "#3B4F8E")+
+  geom_line(data = predictions.knz.norm, 
+            aes(x = x , y = predicted))+
+  scale_x_continuous(expand = c(0,0.02),
+                     limits = c(0,1.01)) +
+  scale_y_continuous(expand = c(0,0.02),
+                     limits = c(0,1.01)) +
+  labs(x = "Normalized previous year dead biomass",
+       y = "Nomralized live biomass") +
+  theme_classic()
+```
+
+```{r Analyses by plot}
+
+# Sum all biomass across plots within a year
+knz.year_totals <- knz %>% 
+  group_by(recyear, watershed, transect, plotnum) %>% 
+  summarize(live_biomass.total = sum(total_live_biomass),
+            #live_biomass.log = log(live_biomass.total + 1),
+            dead_biomass.prev = sum(pryrdead),
+            #dead_biomass.prev.log = log(dead_biomass.prev + 1),
+            dead_biomass.total = sum(total_dead_biomass))
+            #dead_biomass.log = log(dead_biomass.total + 1)) 
+
+ggplot(knz.year_totals, aes(x = dead_biomass.total, y = live_biomass.total, color = watershed)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm") +
+  scale_x_continuous(expand = c(0.01,1)) +
+  scale_y_continuous(expand = c(0.01,1)) +
+  labs(x = "Previous year dead biomass",
+       y = "Current year live biomass") +
+  theme_classic()
+
+
+## glmm with total dead_biomass (previous + current year)
+knz.glmm <- glmmTMB(live_biomass.total ~ dead_biomass.total + (1|transect),
+                    data = knz.year_totals)
+summary(knz.glmm)
+
+predictions.knz <- ggpredict(knz.glmm, terms = ~dead_biomass.total + (1|transect))
+plot(predictions.knz)
+predictions.knz <- as.data.frame(predictions.knz)
+
+# Model visualization
+ggplot()+
+  geom_ribbon(data = predictions.knz, 
+              aes(x = x, y = predicted, ymin =conf.low, ymax = conf.high), 
+              alpha =0.5,
+              fill = "#3B4F8E")+
+  geom_line(data = predictions.knz, 
+            aes(x = x , y = predicted))+
+  geom_point(data = knz.year_totals, 
+             aes(x = dead_biomass.total, y = live_biomass.total),
+             alpha = 0.6,
+             size = 2) +
+  labs(x = "Previous + current year dead biomass",
+       y = "Current year live biomass") +
+  theme_classic()
+
+# Cohen's f^2
+full_model.knz <- lm(live_biomass.log ~ dead_biomass.log, data = knz.year_totals)
+null_model.knz <- lm(live_biomass.log ~ 1, data = knz.year_totals)
+R2_full.knz <- summary(full_model.knz)$r.squared
+R2_null.knz <- summary(null_model.knz)$r.squared
+f2 <- (R2_full.knz - R2_null.knz) / (1 - R2_full.knz)
+
+## glmm with just prvious year dead biomass
+knz.glmm.prev <- glmmTMB(live_biomass.total ~ dead_biomass.prev + (1|transect),
+                    data = knz.year_totals)
+summary(knz.glmm.prev)
+
+predictions.knz.prev <- ggpredict(knz.glmm.prev, terms = ~dead_biomass.prev + (1|transect))
+plot(predictions.knz.prev)
+predictions.knz.prev <- as.data.frame(predictions.knz.prev)
+
+# Model visualization
+ggplot()+
+  geom_ribbon(data = predictions.knz.prev, 
+              aes(x = x, y = predicted, ymin =conf.low, ymax = conf.high), 
+              alpha =0.5,
+              fill = "#3B4F8E")+
+  geom_line(data = predictions.knz.prev, 
+            aes(x = x , y = predicted))+
+  geom_point(data = knz.year_totals, 
+             aes(x = dead_biomass.prev, y = live_biomass.total),
+             alpha = 0.6,
+             size = 2) +
+  labs(x = "Previous year dead biomass",
+       y = "Current year live biomass") +
+  theme_classic()
+
+
+```
+
+
+## Virginia Coastal Reserve
+```{r Data cleaning and wrangling}
+
+# Filter original data for just live and dead oysters
+vcr <- read_csv("Data/Virginia Coastal/Oyster_Count_Data_2022_03_10.csv") %>% 
+  clean_names() %>% 
+  select(site, sample, date, species, species_count) %>% 
+  #select(-c(temperature_c, salinity_ppt, algae_percent, latitude, longitude)) %>% 
+  filter(species == c("Adult Oyster", "Box Adult Oyster", "Box Spat Oyster", "Spat Oyster")) %>% 
+  mutate(year = substr(date, nchar(date) - 1, nchar(date)),
+         year = paste0("20", year)) 
+
+# Create summary dataframe for juvenile oyster densities 
+vcr.juv_density <- vcr %>% 
+  mutate(species = case_when(species == "Adult Oyster" ~ "Adult",
+                             species == "Spat Oyster" ~ "Spat",
+                             TRUE ~ "Dead")) %>% 
+  filter(species != "Adult") %>% 
+  group_by(site, species, year) %>% 
+  summarize(mean_density = mean(species_count)) %>% 
+  pivot_wider(names_from = species, values_from = mean_density) %>% 
+  drop_na()
+
+# Create dataframe with dead oyster density lagged one year behind juvenile density
+vcr_lagged <- vcr.juv_density %>% 
+  group_by(site) %>% 
+  mutate(lagged_Dead = lag(Dead)) %>% 
+  filter(lagged_Dead < 100)
+
+## Visualizations
+# Juvenile oyster density ~ dead oyster density in previous year (lagged)
+ggplot(vcr_lagged, aes(x = lagged_Dead, y = Spat)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm") +
+  #scale_x_continuous(expand = c(0.01,0)) +
+  #scale_y_continuous(expand = c(0.01,0)) +
+  labs(x = "Dead oyster density (previous year)",
+       y = "Juvenile oyster density") +
+  theme_classic()
+
+# Normalized juvenile oyster density ~ normalized dead oyster density in previous year (lagged)
+ggplot(vcr_lagged, aes(x = lagged_dead.norm, y = spat.norm)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm") +
+  scale_x_continuous(expand = c(0.01,0)) +
+  scale_y_continuous(expand = c(0.01,0)) +
+  labs(x = "Normalized lagged dead oyster density",
+       y = "Normalized juvenile oyster density") +
+  theme_classic()
+```
+
+```{r Analyses of juvenile oyster density ~ lagged dead oyster density}
+
+#Check normality of Spat and lagged_Dead
+hist(vcr_lagged$Spat)
+hist(vcr_lagged$lagged_Dead) # both positively skewed
+
+# Log-transform to increase normality
+vcr_lagged$spat.log <- log1p(vcr_lagged$Spat)  # log1p computes log(x + 1)
+vcr_lagged$lagged_dead.log <- log1p(vcr_lagged$lagged_Dead)
+
+hist(vcr_lagged$spat.log)
+hist(vcr_lagged$lagged_dead.log)
+
+# Simple linear model
+model <- lm(spat.log ~ lagged_dead.log, data = vcr_lagged)
+summary(model)
+
+# glmm of 
+juv_oyst.glmm <- glmmTMB(Spat ~ lagged_Dead + (1|site),
+                         data = vcr_lagged)
+summary(juv_oyst.glmm)
+
+predictions.juv_oyst <- ggpredict(juv_oyst.glmm, terms = ~lagged_Dead)
+plot(predictions.juv_oyst)
+predictions.juv_oyst <- as.data.frame(predictions.juv_oyst)
+
+# Model visualization
+ggplot()+
+  geom_ribbon(data = predictions.juv_oyst, 
+              aes(x = x, y = predicted, ymin =conf.low, ymax = conf.high), 
+              alpha =0.5,
+              fill = "#3B4F8E")+
+  geom_line(data = predictions.juv_oyst, 
+            aes(x = x , y = predicted))+
+  geom_point(data = vcr_lagged, 
+             aes(x = lagged_Dead, y = Spat),
+             alpha = 0.6,
+             size = 2) +
+  labs(x = Dead~oyster~density~(Ind/0.25~m^2)~prev~yr,
+       y = Juvenile~oyster~density~(Ind/0.25~m^2)) +
+  theme_classic()
+
+# Cohen's f^2
+full_model <- lm(spat.log ~ lagged_dead.log, data = vcr_lagged)
+null_model <- lm(spat.log ~ 1, data = vcr_lagged)
+R2_full <- summary(full_model)$r.squared
+R2_null <- summary(null_model)$r.squared
+f2 <- (R2_full - R2_null) / (1 - R2_full)
+
+# Partial eta squared
+library(lme4)
+mixed_model <- lmer(spat.log ~ lagged_dead.log + (1 | site), data = vcr_lagged)
+aov(mixed_model)
+# Calculate eta squared (η²) using an ANOVA or specialized package
+
+```
+
+```{r}
+## Normalized densities
+vcr_lagged <- vcr_lagged %>% 
+  mutate(dead.norm = lagged_Dead/max(vcr_lagged$lagged_Dead),
+         spat.norm = Spat/max(vcr_lagged$Spat))
+
+# glmm of normalized juvenile oyster density ~ normalized dead oyster density
+juv_oyst.norm.glmm <- glmmTMB(spat.norm ~ dead.norm + (1|site),
+                         data = vcr_lagged)
+summary(juv_oyst.glmm)
+
+predictions.juv_oyst.norm <- ggpredict(juv_oyst.norm.glmm, terms = ~dead.norm)
+plot(predictions.juv_oyst.norm)
+predictions.juv_oyst.norm <- as.data.frame(predictions.juv_oyst.norm)
+
+# Model visualization
+ggplot()+
+  geom_ribbon(data = predictions.juv_oyst.norm, 
+              aes(x = x, y = predicted, ymin =conf.low, ymax = conf.high), 
+              alpha =0.5,
+              fill = "#3B4F8E")+
+  geom_line(data = predictions.juv_oyst.norm, 
+            aes(x = x , y = predicted))+
+  geom_point(data = vcr_lagged, 
+             aes(x = dead.norm, y = spat.norm),
+             alpha = 0.6,
+             size = 2) +
+  labs(x = "Normalized previous year dead oyster density",
+       y = "Normalized juvenile oyster density") +
+  scale_x_continuous(expand = c(0,0.02),
+                     limits = c(0,1.01)) +
+  scale_y_continuous(expand = c(0,0.02),
+                     limits = c(0,1.01)) +
+  theme_classic()
+```
+
+
+```{r Time-averaged analysis}
+# summarize by year
+vcr_lagged.summary <- vcr_lagged %>% 
+  group_by(year) %>% 
+  summarize(mean_dead = mean(lagged_Dead),
+            se_dead = sd(lagged_Dead)/sqrt(n()),
+            mean_spat = mean(Spat),
+            se_spat = sd(Spat)/sqrt(n())) %>% 
+  filter(year != "2006")
+
+ggplot(vcr_lagged.summary, aes(x = mean_dead, y = mean_spat)) +
+  geom_point(size = 2) +
+  geom_errorbarh(aes(xmax = mean_dead + se_dead,
+                    xmin = mean_dead - se_dead)) +
+  geom_errorbar(aes(ymax = mean_spat + se_spat,
+                    ymin = mean_spat - se_spat)) +
+  labs(x = "Dead oyster density (previous year)",
+       y = "Juvenile oyster density") +
+  theme_classic()
+
+```
+
+## Harvard Forest
+```{r}
+
+hvf <- read_csv("Data/Harvard Forest/hf126-02-tree.csv") %>% 
+  clean_names()
+
+```
+
+## H.J. Andrews Experimental Forest
+```{r}
+
+hja <- read_csv("Data/Andrews Forest/TP07303_v10.csv") %>% 
+  clean_names()
+
+```
+
+## Moorea Coral Reef
+```{r}
+
+## Live coral and macroalgae
+# Load wide data table
+mcr_coral.wide <- read_csv("Data/Moorea Coral Reef/knb-lter-mcr.4_2_20240105.csv") %>% 
+  clean_names() %>% 
+  dplyr::select(-c(3:6, 21, 34)) 
+
+# Convert to long format
+mcr_coral.long <- mcr_coral.wide %>% 
+  pivot_longer(cols = c(3:28), names_to = "taxa", values_to = "percent_cover") %>%
+  mutate(funct_group = case_when(taxa == "macroalgae" ~ "Macroalgae",
+                                 TRUE ~ "Hard coral"),
+         percent_cover = replace(percent_cover, percent_cover == "na", 0),
+         percent_cover = as.numeric(percent_cover))
+
+mcr <- mcr_coral.long %>% 
+  mutate(site = str_sub(location, 0, 6)) %>% 
+  filter(str_detect(location, "Outer"))
+
+## Dead coral
+mcr.dead <- read_csv("Data/Moorea Coral Reef/MCR_LTER_CoralStruct_Coral_Colony_Desc_2006-2011_20120530.csv") %>% 
+  clean_names()
+
+mcr.dead <- mcr.dead %>% 
+  filter(alive_or_dead == "Dead") %>% 
+  mutate(perc_cover = (area_cm2/2500)*100)
+
+ggplot(mcr.dead, aes(x = year, y = perc_cover, color = site)) +
+  geom_point()
+
+ggplot(mcr, aes(x = date, y = perc_cover, color = site)) +
+  geom_point()
+
+```
+
+#### Algae cover ~ dead coral cover
+```{r Data wrangling for dead coral cover and algae}
+
+# Live and dead coral annotations
+regions_master <- read_csv("Data/Moorea Coral Reef/Regions_master.csv") %>% 
+  clean_names
+
+# Create dataframe of dead coral cover
+dead_coral <- regions_master %>%
+  filter(tag_lab_class_name == "Dead coral") %>% 
+  group_by(plot, treatment, tag_lab_date) %>% 
+  summarize(dead_coral.m_sq = sum(tag_lab_surf_area)*0.0001) %>% 
+  mutate(time_point = case_when(tag_lab_date == "8/1/19" ~ 2019,
+                                       tag_lab_date == "8/1/20" ~ 2020,
+                                       tag_lab_date == "8/1/21" ~ 2021,
+                                       tag_lab_date == "8/1/22" ~ 2022,
+                                       tag_lab_date == "8/1/23" ~ 2023),
+         time_point = as.factor(time_point))
+
+```
+
+#### Annual loss of live coral ~ dead coral cover
+```{r Data wrangling for live coral loss ~ algae cover}
+
+# Create dataframe for live coral only
+live_coral <- regions_master %>% 
+  filter(tag_lab_class_name == "Pocillopora" | tag_lab_class_name == "Acropora") %>% 
+  group_by(plot, treatment, tag_lab_date) %>% 
+  summarize(live_coral.total_surf = sum(tag_lab_surf_area)) %>% 
+  mutate(m_sq = live_coral.total_surf*0.0001,
+         years_since_start = case_when(tag_lab_date == "8/1/19" ~ 0,
+                                       tag_lab_date == "8/1/20" ~ 1,
+                                       tag_lab_date == "8/1/21" ~ 2,
+                                       tag_lab_date == "8/1/22" ~ 3,
+                                       tag_lab_date == "8/1/23" ~ 4),
+         time_point = case_when(tag_lab_date == "8/1/19" ~ 2019,
+                                       tag_lab_date == "8/1/20" ~ 2020,
+                                       tag_lab_date == "8/1/21" ~ 2021,
+                                       tag_lab_date == "8/1/22" ~ 2022,
+                                       tag_lab_date == "8/1/23" ~ 2023),
+         time_point = as.factor(time_point))
+
+
+# Create dataframe for proportional changes in live coral in each year (time period)
+coral_change.prop <- live_coral %>%
+  select(-c(tag_lab_date, live_coral.total_surf, years_since_start)) %>%
+  rename(live_coral.m_sq = m_sq) %>%
+  pivot_wider(names_from = time_point, values_from = live_coral.m_sq) %>%
+  rename(year_0 = "2019",
+         year_1 = "2020",
+         year_2 = "2021",
+         year_3 = "2022",
+         year_4 = "2023") %>%
+  mutate(delta.1 = (year_1 - year_0)/year_0,
+         delta.2 = (year_2 - year_1)/year_1,
+         delta.3 = (year_3 - year_2)/year_2,
+         delta.4 = (year_4 - year_3)/year_3)
+
+coral_change.prop <- coral_change.prop %>%
+  select(-c(year_0, year_1, year_2, year_3, year_4)) %>%
+  pivot_longer(cols = c("delta.1", "delta.2", "delta.3", "delta.4"),
+               names_to = "delta_year",
+               values_to = "delta_coral") %>%
+  drop_na() %>%
+  mutate(period = case_when(delta_year == "delta.1" ~ "2019 - 2020",
+                          delta_year == "delta.2" ~ "2020 - 2021",
+                          delta_year == "delta.3" ~ "2021 - 2022",
+                          delta_year == "delta.4" ~ "2022 - 2023"))
+
+# Create dataframe for average algae cover in each time period
+dead_coral.means <- dead_coral %>%
+  select(-tag_lab_date) %>% 
+  pivot_wider(names_from = time_point, values_from = dead_coral.m_sq) %>%
+  rename(year_0 = "2019",
+         year_1 = "2020",
+         year_2 = "2021",
+         year_3 = "2022",
+         year_4 = "2023") %>%
+  mutate(mean.1 = (year_1 + year_0)/2,
+         mean.2 = (year_2 + year_1)/2,
+         mean.3 = (year_3 + year_2)/2,
+         mean.4 = (year_4 + year_3)/2)
+
+dead_coral.means <- dead_coral.means %>%
+  select(-c(year_0, year_1, year_2, year_3, year_4)) %>%
+  pivot_longer(cols = c("mean.1", "mean.2", "mean.3", "mean.4"),
+               names_to = "period",
+               values_to = "dead.mean") %>%
+  drop_na() %>%
+  mutate(period = case_when(period == "mean.1" ~ "2019 - 2020",
+                          period == "mean.2" ~ "2020 - 2021",
+                          period == "mean.3" ~ "2021 - 2022",
+                          period == "mean.4" ~ "2022 - 2023"))
+
+live_dead <- merge(coral_change.prop, dead_coral.means)
+live_dead <- live_dead %>% 
+  mutate(delta_coral.trans = delta_coral*(-1))
+
+ggplot(live_dead, aes(x = dead.mean, y = delta_coral)) +
+  geom_point()
+
+```
+
+```{r Stats for change in coral ~ algae cover}
+
+# Linear mixed effects model of annual proportional change in coral cover ~ mean algae cover in the same period; time period and plot identity as random effects
+live_dead.glmm <- glmmTMB(delta_coral ~ dead.mean + (1|period) + (1|plot), 
+                    family = gaussian(link = "identity"),
+                    data = live_dead)
+summary(live_dead.glmm)
+
+# Get confidence interval for model
+confint(live_dead.glmm)
+
+# Check residuals
+hist(residuals(live_dead.glmm))
+car::qqPlot(residuals(live_dead.glmm))
+
+# Plot model predictions and create dataframe 
+plot(ggpredict(live_dead.glmm, terms = ~dead.mean))
+live_dead.predictions <- as.data.frame(ggpredict(live_dead.glmm, terms = ~dead.mean))
+
+```
+
+```{r}
+live_dead <- live_dead %>% 
+  mutate(delta_coral.norm = (delta_coral/-0.4589132)*(-1),
+         dead.mean.norm = dead.mean/4.5809965)
+
+live_dead.norm.glmm <- glmmTMB(delta_coral.norm ~ dead.mean.norm + (1|period) + (1|plot), 
+                    family = gaussian(link = "identity"),
+                    data = live_dead)
+summary(live_dead.glmm)
+
+plot(ggpredict(live_dead.norm.glmm, terms = ~dead.mean.norm))
+live_dead.predictions.norm <- as.data.frame(ggpredict(live_dead.norm.glmm, terms = ~dead.mean.norm))
+```
+
+```{r Visualizaton of proportional coral change ~ mean dead cover in each period}
+
+# Model visualization
+live_dead %>%
+  ggplot()+
+  geom_ribbon(data = live_dead.predictions, 
+              aes(x = x, y = predicted, ymin =conf.low, ymax = conf.high), 
+              alpha =0.5,
+              fill = "#3B4F8E")+
+  geom_line(data = live_dead.predictions, 
+            aes(x = x, y = predicted))+
+  geom_point(aes(x = dead.mean, y = delta_coral),
+             alpha = 0.6,
+             size = 2)+
+  labs(x = Mean~annual~dead~coral~cover~(m^2),
+       y = "Annual prop. change in live coral cover") +
+  # scale_shape_manual(values = c(19,17),
+  #                    labels = c("Removal", "Retention"),
+  #                    name = "Skeletal treatment") +
+  theme_classic(base_size = 12)
+
+# Normalized
+live_dead %>%
+  ggplot()+
+  geom_ribbon(data = live_dead.predictions.norm, 
+              aes(x = x, y = predicted, ymin =conf.low, ymax = conf.high), 
+              alpha =0.5,
+              fill = "#3B4F8E")+
+  geom_line(data = live_dead.predictions.norm, 
+            aes(x = x, y = predicted))+
+  geom_point(aes(x = dead.mean.norm, y = delta_coral.norm),
+             alpha = 0.6,
+             size = 2)+
+  labs(x = "Normalized annual dead coral cover",
+       y = "Normalized annual change in live coral") +
+  scale_x_continuous(expand = c(0,0.02),
+                     limits = c(0,1.01)) +
+  #scale_y_continuous(expand = c(0,0.02),
+                     #limits = c(0,-1.01)) +
+  theme_classic(base_size = 10)
+
+```
+
+## Santa Barbara Coastal
+
+```{r}
+
+# sbc <- read_csv("Data/Santa Barbara Coastal/Annual_Cover_All_Years_20240823.csv")
+# 
+# sbc.split <- split(sbc, ceiling(seq_along(1:nrow(sbc))/100000)) # Split into chunks of ~100,000 rows
+# for (i in seq_along(sbc.split)) {
+#   write.csv(sbc.split[[i]], sprintf("Data/Chunk_%02d.csv", i), row.names = FALSE)
+# }
+# 
+# 
+# # Create dataframe with only dead macrocystis holdfasts
+# sbc_dead <- sbc %>% 
+#   filter(sp_code == "DMH",
+#          percent_cover > -1) %>% 
+#   select(year, site, transect, quad, percent_cover) %>% 
+#   rename(dmh_cover = percent_cover)
+# 
+# # Look at distribution of dead holdfast cover on different transects over time
+# sbc_dead %>% 
+#   group_by(year, site, transect, quad) %>% 
+#   summarize(dead_cover = sum(dmh_cover)) %>% 
+#   ggplot(aes(x = dead_cover)) +
+#     geom_histogram() +
+#     facet_wrap(~year)
+# 
+# sbc %>% 
+#   filter(taxon_genus == "Macrocystis")
+
+```
+
+```{r}
+# # Create dataframe of inverts and algae only
+# sbc.groups <- sbc %>% 
+#   filter(percent_cover > -1,
+#          sp_code != "DMH",
+#          group != "PLANT") %>% 
+#   group_by(year, site, transect, quad, group) %>% 
+#   summarize(total_cover = sum(percent_cover))
+#   
+# sbc.merged <- merge(sbc.groups, sbc_dead)
+# 
+# sbc.lagged <- sbc.merged %>% 
+#   mutate(dmh_cover.lagged = lag(dmh_cover))
+# 
+# ggplot(sbc.merged, aes(x = dmh_cover, y = total_cover)) +
+#   geom_point(alpha = 0.7) +
+#   facet_wrap(~group) +
+#   theme_classic()
+
+```
+
+
+
+# Analyses across systems
+## Effect sizes
+```{r}
+
+library(glmmTMB)
+library(broom.mixed)
+
+knz.effects <- broom.mixed::tidy(knz.norm.glmm, effects = "fixed", conf.int = TRUE)
+  knz.effects[knz.effects$term == "predictor", ]
+  
+vcr.effects <- broom.mixed::tidy(juv_oyst.norm.glmm, effects = "fixed", conf.int = TRUE)
+  vcr.effects[vcr.effects$term == "predictor", ]
+
+mcr.effects <- broom.mixed::tidy(live_dead.norm.glmm, effects = "fixed", conf.int = TRUE)
+  mcr.effects[mcr.effects$term == "predictor", ]
+
+  
+lter.effects <- rbind(knz.effects, vcr.effects, mcr.effects)
+lter.effects <- lter.effects %>% 
+  filter(term != "(Intercept)") %>% 
+  mutate(ecosystem = c("Tallgrass prairie", "Oyster reef", "Coral reef"),
+         significance = ifelse(conf.low > 0 | conf.high < 0, "Significant", "Not Significant"))
+
+
+ggplot(lter.effects, aes(x = estimate, y = reorder(ecosystem, -estimate), color = significance)) +
+  geom_point(size = 2) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),
+                 height = 0,
+                 linewidth = 1) +  
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(x = "Effect of material legacy on demographic metric (estimate ± 95% CI)",
+    y = "Ecosystem type") +
+  scale_color_manual(name = "",
+                     labels = c("", ""),
+                     values = c("grey", "black")) +
+  theme_minimal()
+  
+```
+
